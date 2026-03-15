@@ -1,13 +1,15 @@
 # Receipt Scanning Application
 
-A mobile-first web app that lets you photograph paper receipts with your phone camera, automatically extracts all values using OCR + AI, and stores them in a searchable expense log — with one-tap export to Workday/HR portals and optional Google Sheets sync.
+A mobile-first web app that lets you photograph paper receipts with your phone camera, automatically extracts all values using open-source OCR, and stores them in a searchable expense log — with one-tap export to Workday/HR portals and optional Google Sheets sync.
+
+**100% open source — no external APIs or paid services required.**
 
 ---
 
 ## Features
 
 - **Scan receipts** — take a photo with your phone camera
-- **Auto-extraction** — PaddleOCR + Claude AI reads vendor, date, line items, tax, and total
+- **Auto-extraction** — PaddleOCR + EasyOCR reads vendor, date, line items, tax, and total
 - **Review & edit** — correct any mistakes before saving
 - **Expense categories** — tag each receipt (Meals, Travel, Office, Other)
 - **History** — search and browse all saved receipts
@@ -21,10 +23,15 @@ A mobile-first web app that lets you photograph paper receipts with your phone c
 ## How It Works
 
 ```
-Phone camera → PaddleOCR (free, local) → Claude AI (structures text into JSON)
-                                       ↓ (if low confidence)
-                               Claude Vision API (fallback)
+Phone camera
+    → PaddleOCR (primary — free, runs locally)
+    → EasyOCR (fallback — if PaddleOCR confidence is low)
+    → Regex parser (structures raw text into vendor / date / items / totals)
+    → Review screen (user corrects anything)
+    → Saved to local database
 ```
+
+Everything runs on your own machine. No data is sent to any external service.
 
 ---
 
@@ -33,7 +40,7 @@ Phone camera → PaddleOCR (free, local) → Claude AI (structures text into JSO
 ### Requirements
 - Python 3.11+
 - Node.js 18+
-- An [Anthropic API key](https://console.anthropic.com/)
+- No API keys needed
 
 ### Backend
 
@@ -43,8 +50,7 @@ python -m venv venv
 source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-cp .env.example .env
-# Edit .env and add your ANTHROPIC_API_KEY
+cp .env.example .env          # no keys needed, defaults work out of the box
 
 flask db upgrade              # creates the SQLite database
 python run.py                 # starts on http://localhost:5000
@@ -71,7 +77,7 @@ Open http://localhost:5173 on your phone or desktop browser.
 5. Add to your `backend/.env`:
    ```
    GOOGLE_SHEETS_CREDENTIALS_FILE=/path/to/credentials.json
-   GOOGLE_SHEET_ID=your-sheet-id-from-the-url
+   GOOGLE_SHEET_ID=your-google-sheet-id-from-the-url
    ```
 
 Each saved receipt will automatically appear as a new row in the sheet.
@@ -91,10 +97,9 @@ The CSV columns map directly to Workday expense import fields:
 
 | Variable | Required | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key |
 | `DATABASE_URL` | No | Defaults to `sqlite:///receipts.db` |
 | `UPLOAD_FOLDER` | No | Defaults to `./uploads` |
-| `OCR_CONFIDENCE_THRESHOLD` | No | Defaults to `0.70` (below this → Claude Vision fallback) |
+| `OCR_CONFIDENCE_THRESHOLD` | No | Defaults to `0.70` (below this → EasyOCR fallback) |
 | `FLASK_ENV` | No | `development` or `production` |
 | `SECRET_KEY` | No | Flask secret key (change in production) |
 | `GOOGLE_SHEETS_CREDENTIALS_FILE` | No | Path to service account JSON |

@@ -1,9 +1,11 @@
 import os
 import uuid
 from flask import Blueprint, request, jsonify, current_app
-from werkzeug.utils import secure_filename
+from PIL import Image
+from io import BytesIO
 
-from app.services import ocr_service, claude_service
+from app.services import ocr_service
+from app.services.parser_service import extract_from_text
 
 bp = Blueprint("ocr", __name__, url_prefix="/api/ocr")
 
@@ -17,8 +19,9 @@ def _allowed_file(filename: str) -> bool:
 @bp.route("/extract", methods=["POST"])
 def extract():
     """
-    Accept a receipt image, run OCR + Claude structuring, return extracted data.
-    Does NOT save to the database — caller reviews then POSTs to /api/receipts.
+    Accept a receipt image, run OCR (PaddleOCR → EasyOCR fallback),
+    parse the text into structured data, and return it.
+    Does NOT save to the database.
     """
     if "image" not in request.files:
         return jsonify({"error": "No image file provided"}), 400
@@ -32,50 +35,34 @@ def extract():
 
     image_bytes = file.read()
 
-    # Save upload
+    # Save image to uploads folder
     upload_folder = current_app.config["UPLOAD_FOLDER"]
     os.makedirs(upload_folder, exist_ok=True)
     filename = f"{uuid.uuid4()}.jpg"
     save_path = os.path.join(upload_folder, filename)
 
-    # Step 1: Try PaddleOCR
-    raw_ocr_text, confidence = ocr_service.extract_text(image_bytes)
-    threshold = current_app.config["OCR_CONFIDENCE_THRESHOLD"]
-
     try:
-        if raw_ocr_text and confidence >= threshold:
-            # Step 2a: OCR succeeded — structure with Claude text API
-            data = claude_service.extract_with_text(raw_ocr_text)
-        else:
-            # Step 2b: Low confidence or OCR failed — fall back to Claude Vision
-            current_app.logger.info(
-                f"OCR confidence {confidence:.2f} < {threshold}, using Claude Vision"
-            )
-            data = claude_service.extract_with_vision(image_bytes)
-
-        # Persist image file
-        with open(save_path, "wb") as f:
-            from PIL import Image
-            from io import BytesIO
-            img = Image.open(BytesIO(image_bytes))
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            img.save(save_path, format="JPEG", quality=85)
-
-        data["image_filename"] = filename
-        data["ocr_raw_text"] = raw_ocr_text
-        data["ocr_confidence"] = round(confidence, 3)
-        return jsonify(data), 200
-
+        img = Image.open(BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        # Resize if too large
+        max_height = 1600
+        if img.height > max_height:
+            ratio = max_height / img.height
+            img = img.resize((int(img.width * ratio), max_height), Image.LANCZOS)
+        img.save(save_path, format="JPEG", quality=85)
     except Exception as e:
-        current_app.logger.error(f"Extraction failed: {e}")
+        current_app.logger.warning(f"Image save failed: {e}")
+
+    # Run OCR (PaddleOCR with EasyOCR fallback — all open source)
+    raw_ocr_text, confidence = ocr_service.extract_text(image_bytes)
+
+    if not raw_ocr_text:
         return jsonify({
-            "error": "Extraction failed",
-            "detail": str(e),
+            "error": "Could not read text from image",
             "image_filename": filename,
-            "ocr_raw_text": raw_ocr_text,
-            "ocr_confidence": round(confidence, 3),
-            # Return empty skeleton so frontend can still show editable form
+            "ocr_raw_text": "",
+            "ocr_confidence": 0.0,
             "vendor_name": None,
             "date": None,
             "currency": "USD",
@@ -83,4 +70,12 @@ def extract():
             "tax": None,
             "total": None,
             "line_items": [],
-        }), 200  # 200 so frontend doesn't error out — partial result
+        }), 200  # 200 so frontend shows editable empty form
+
+    # Parse OCR text into structured receipt data
+    data = extract_from_text(raw_ocr_text)
+    data["image_filename"] = filename
+    data["ocr_raw_text"] = raw_ocr_text
+    data["ocr_confidence"] = round(confidence, 3)
+
+    return jsonify(data), 200
