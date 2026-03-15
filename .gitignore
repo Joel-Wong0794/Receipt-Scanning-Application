@@ -191,6 +191,23 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Node / frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# SQLite databases (runtime, not source)
+*.db
+*.sqlite3
+backend/instance/
+
+# Uploaded receipt images (runtime data)
+backend/uploads/
+
+# Environment files
+backend/.env
+
 # PyPI configuration file
 .pypirc
 
